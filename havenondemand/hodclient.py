@@ -1,5 +1,6 @@
 import requests
 import json
+import time
 from requests.exceptions import ConnectionError
 
 proxyDict = {
@@ -15,6 +16,7 @@ class ErrorCode:
 	CONNECTION_ERROR = 1640
 	IO_ERROR = 1650
 	INVALID_PARAM = 1660
+	INVALID_JSON = 1670
 
 class HODErrorObject:
 	error = 0
@@ -32,6 +34,7 @@ class HODErrors:
 class HODClient(object):
 	hodEndPoint = "http://api.havenondemand.com/1/api/"
 	hodJobResult = "http://api.havenondemand.com/1/job/result/"
+	hodJobStatus = "http://api.havenondemand.com/1/job/status/"
 	apiVersion = "v1"
 	apiKey = None
 	proxy = None
@@ -42,36 +45,66 @@ class HODClient(object):
 		self.apiKey = apikey
 		self.proxy = proxy
 
-	def GetJobResult(self, jobId, callback):
+
+	def GetJobResult(self, jobId, callback, **kwargs):
 		queryStr = "%s%s?apikey=%s" % (self.hodJobResult, jobId, self.apiKey)
 		try:
 			response = requests.get(queryStr, verify=False, timeout=600)
-			if response.status_code != 200:
+			if response.status_code == 429:
+				time.sleep(2)
+				self.PostRequest(jobId, callback, **kwargs)
+			elif response.status_code != 200:
 				jsonObj = json.loads(response.text)
-				print jsonObj
 				self.__parseHODResponse(jsonObj)
-				callback("", self.errorsList)
+				callback("", self.errorsList, **kwargs)
 			else:
+				print response.json()
 				resp = self.__parseHODResponse(response.json())
-				if resp == "queued":
-					callback("", self.errorsList)
-				elif resp == "in progress":
-					callback("", self.errorsList)
-				elif resp == "errors":
-					callback("", self.errorsList)
+				if resp == "queued" and resp == "in progress" and resp == "errors":
+					callback("", self.errorsList, **kwargs)
 				else:
-					callback(resp, None)
+					callback(resp, None, **kwargs)
 		except requests.Timeout:
 			self.__createErrorObject(ErrorCode.TIMEOUT, "timeout")
-			callback ("", self.errorsList)
+			callback ("", self.errorsList, **kwargs)
 		except requests.HTTPError:
 			self.__createErrorObject(ErrorCode.HTTP_ERROR, "HTTP error")
-			callback ("", self.errorsList)
+			callback ("", self.errorsList, **kwargs)
 		except ConnectionError:
 			self.__createErrorObject(ErrorCode.CONNECTION_ERROR, "Connection error")
-			callback ("", self.errorsList)
+			callback ("", self.errorsList, **kwargs)
 
-	def PostRequest(self, params, hodApp, async, callback):
+
+	def GetJobStatus(self, jobId, callback, **kwargs):
+		queryStr = "%s%s?apikey=%s" % (self.hodJobStatus, jobId, self.apiKey)
+		try:
+			response = requests.get(queryStr, verify=False, timeout=600)
+			if response.status_code == 429:
+				time.sleep(2)
+				self.PostRequest(jobId, callback, **kwargs)
+			elif response.status_code != 200:
+				jsonObj = json.loads(response.text)
+				self.__parseHODResponse(jsonObj)
+				callback("", self.errorsList, **kwargs)
+			else:
+				print response.json()
+				resp = self.__parseHODResponse(response.json())
+				if resp == "queued" and resp == "in progress" and resp == "errors":
+					callback("", self.errorsList, **kwargs)
+				else:
+					callback(resp, None, **kwargs)
+		except requests.Timeout:
+			self.__createErrorObject(ErrorCode.TIMEOUT, "timeout")
+			callback ("", self.errorsList, **kwargs)
+		except requests.HTTPError:
+			self.__createErrorObject(ErrorCode.HTTP_ERROR, "HTTP error")
+			callback ("", self.errorsList, **kwargs)
+		except ConnectionError:
+			self.__createErrorObject(ErrorCode.CONNECTION_ERROR, "Connection error")
+			callback ("", self.errorsList, **kwargs)
+
+
+	def PostRequest(self, params, hodApp, async, callback,**kwargs):
 		queryStr = self.hodEndPoint
 		if async is True:
 			queryStr += "async/%s/%s" % (hodApp, self.apiVersion)
@@ -89,7 +122,7 @@ class HODClient(object):
 							files.append((key, f))
 						except IOError:
 							self.__createErrorObject(ErrorCode.IO_ERROR, "File not found")
-							callback("", self.errorsList)
+							callback("", self.errorsList, **kwargs)
 							return
 				else:
 					for vv in value:
@@ -101,41 +134,51 @@ class HODClient(object):
 						files = {key: f}
 					except IOError:
 						self.__createErrorObject(ErrorCode.IO_ERROR, "File not found")
-						callback("", self.errorsList)
+						callback("", self.errorsList, **kwargs)
 						return
 				else:
 					data.append((key, value))
 		try:
 			response = requests.post(queryStr, data=data, files=files, proxies=proxyDict, verify=False, timeout=600)
-			if response.status_code != 200:
-				jsonObj = json.loads(response.text)
-				self.__parseHODResponse(jsonObj)
-				callback("", self.errorsList)
+			if response.status_code == 429:
+				time.sleep(2)
+				print "Throttling requested: Sleeping for 2 seconds"
+				self.PostRequest(params,hodApp, async, callback,**kwargs)
+			elif response.status_code != 200:
+				try:
+				    jsonObj = json.loads(response.text)
+				    self.__parseHODResponse(jsonObj)
+				except ValueError:
+				    #print "Invalid JSON"
+				    self.__createErrorObject(ErrorCode.INVALID_JSON, "Invalid JSON response")
+				except:
+    				    print "Unexpected error:", sys.exc_info()[0]
+				    self.__createErrorObject(ErrorCode.INVALID_JSON, "Invalid JSON response")
+				    raise
+
+				callback("", self.errorsList, **kwargs)
 			else:
 				if async is False:
 					resp = self.__parseHODResponse(response.json())
-					if resp == "queued":
-						callback("", self.errorsList)
-					elif resp == "in progress":
-						callback("", self.errorsList)
-					elif resp == "errors":
-						callback("", self.errorsList)
+					if resp == "queued" and resp == "in progress" and resp == "errors":
+						callback("", self.errorsList, **kwargs)
 					else:
-						callback(resp, None)
+						callback(resp, None, **kwargs)
 				else:
 					jobID = self.__parseJobId(response)
 					if jobID == "errors":
-						callback("", self.errorsList)
+						callback("", self.errorsList, **kwargs)
 					else:
-						callback(jobID, None)
+						callback(jobID, None, **kwargs)
 		except requests.Timeout:
 			self.__createErrorObject(ErrorCode.TIMEOUT, "Request timeout")
-			callback("", self.errorsList)
+			callback("", self.errorsList, **kwargs)
 		except requests.ConnectionError:
 			self.__createErrorObject(ErrorCode.CONNECTION_ERROR, "Connection error")
-			callback("", self.errorsList)
+			callback("", self.errorsList, **kwargs)
 
-	def GetRequest(self, params, hodApp, async, callback):
+
+	def GetRequest(self, params, hodApp, async, callback, **kwargs):
 		queryStr = self.hodEndPoint
 		if async is True:
 			queryStr += "async/%s/%s" % (hodApp, self.apiVersion)
@@ -149,41 +192,40 @@ class HODClient(object):
 				return
 			if isinstance(value, list):
 				for vv in value:
-					queryStr += "&%s=%s" %(key, vv)
+					queryStr += "&%s=%s" % (key, vv)
 			else:
 				queryStr += "&%s=%s" % (key, value)
 
 		print queryStr
 		try:
 			response = requests.get(queryStr, verify=False, timeout=600)
-			if response.status_code != 200:
+			if response.status_code == 429:
+				time.sleep(2)
+				print "Throttling requested: Sleeping for 2 seconds"
+				self.GetRequest(params,hodApp,async,callback,**kwargs)
+			elif response.status_code != 200:
 				jsonObj = json.loads(response.text)
-				print jsonObj
 				self.__parseHODResponse(jsonObj)
-				callback("", self.errorsList)
+				callback("", self.errorsList, **kwargs)
 			else:
 				if async is False:
 					resp = self.__parseHODResponse(response.json())
-					if resp == "queued":
-						callback("", self.errorsList)
-					elif resp == "in progress":
-						callback("", self.errorsList)
-					elif resp == "errors":
-						callback("", self.errorsList)
+					if resp == "queued" and resp == "in progress" and resp == "errors":
+						callback("", self.errorsList,**kwargs)
 					else:
-						callback(resp, None)
+						callback(resp, None,**kwargs)
 				else:
 					jobID = self.__parseJobId(response)
 					if jobID == "errors":
-						callback("", self.errorsList)
+						callback("", self.errorsList,**kwargs)
 					else:
-						callback(jobID, None)
+						callback(jobID, None,**kwargs)
 		except requests.Timeout:
 			self.__createErrorObject(ErrorCode.TIMEOUT, "Request timeout")
-			callback ("", self.errorsList)
+			callback ("", self.errorsList,**kwargs)
 		except requests.ConnectionError:
 			self.__createErrorObject(ErrorCode.CONNECTION_ERROR, "Connection error")
-			callback ("", self.errorsList)
+			callback ("", self.errorsList,**kwargs)
 
 	def __createErrorObject(self,code, reason, detail=""):
 		self.errorsList.resetErrorList()
@@ -299,6 +341,7 @@ class HODApps:
 	QUERY_TEXT_INDEX = "querytextindex"
 	RETRIEVE_INDEX_FIELDS = "retrieveindexfields"
 
+	AUTO_COMPLETE = "autocomplete";
 	CLASSIFY_DOCUMENT = "classifydocument"
 	EXTRACT_CONCEPTS = "extractconcepts"
 	CATEGORIZE_DOCUMENT = "categorizedocument"
