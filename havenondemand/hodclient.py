@@ -58,7 +58,7 @@ class HODClient(object):
 				self.__parseHODResponse(jsonObj)
 				callback("", self.errorsList, **kwargs)
 			else:
-				print response.json()
+				#print response.json()
 				resp = self.__parseHODResponse(response.json())
 				if resp == "queued" and resp == "in progress" and resp == "errors":
 					callback("", self.errorsList, **kwargs)
